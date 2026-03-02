@@ -1,7 +1,7 @@
 // On importe useState depuis React.
 // useState, c'est ce qui rend l'interface "réactive" :
 // quand une valeur change, l'affichage se met à jour tout seul.
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import './App.css'
 
 function App() {
@@ -9,9 +9,72 @@ function App() {
   // useState([]) → au départ, la liste de films est vide (tableau vide).
   // useState('') → au départ, le champ titre est vide (string vide).
   // useState(3)  → au départ, la note par défaut est 3.
-  const [films, setFilms] = useState([])
+  const [films, setFilms] = useState(() => {
+    const saved = localStorage.getItem('films')
+    return saved ? JSON.parse(saved) : []
+  })
   const [titre, setTitre] = useState('')
   const [note, setNote] = useState(3)
+
+  // Suggestions de films depuis l'API TMDB
+  const [suggestions, setSuggestions] = useState([])
+  const [showSuggestions, setShowSuggestions] = useState(false)
+
+  // Mode sombre activé par défaut. On stocke la préférence dans localStorage
+  // pour la conserver entre les visites.
+  const [dark, setDark] = useState(() => {
+    const saved = localStorage.getItem('dark-mode')
+    return saved !== null ? saved === 'true' : true
+  })
+
+  // Sauvegarde la liste de films dans localStorage à chaque modification.
+  useEffect(() => {
+    localStorage.setItem('films', JSON.stringify(films))
+  }, [films])
+
+  // useEffect exécute du code quand 'dark' change.
+  // On ajoute/retire la classe 'light' sur <html> pour basculer le thème CSS.
+  useEffect(() => {
+    document.documentElement.classList.toggle('light', !dark)
+    localStorage.setItem('dark-mode', dark)
+  }, [dark])
+
+  // Recherche TMDB avec un délai (debounce) pour ne pas spammer l'API.
+  // À chaque frappe, on attend 300ms avant de lancer la requête.
+  // Si l'utilisateur tape une nouvelle lettre avant, le timer précédent est annulé.
+  useEffect(() => {
+    if (titre.trim().length < 2) {
+      setSuggestions([])
+      return
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `https://api.themoviedb.org/3/search/movie?query=${encodeURIComponent(titre)}&language=fr-FR&page=1`,
+          { headers: { Authorization: `Bearer ${import.meta.env.VITE_TMDB_TOKEN}` } }
+        )
+        const data = await res.json()
+        setSuggestions(data.results?.slice(0, 5) || [])
+        setShowSuggestions(true)
+      } catch {
+        setSuggestions([])
+      }
+    }, 300)
+
+    return () => clearTimeout(timer)
+  }, [titre])
+
+  // Stocke le poster du film sélectionné via les suggestions
+  const [poster, setPoster] = useState(null)
+
+  // Quand l'utilisateur clique sur une suggestion, on remplit le titre et le poster
+  const choisirSuggestion = (film) => {
+    setTitre(film.title)
+    setPoster(film.poster_path)
+    setSuggestions([])
+    setShowSuggestions(false)
+  }
 
   // Cette fonction est appelée quand on clique sur "Ajouter"
   const ajouterFilm = () => {
@@ -24,12 +87,14 @@ function App() {
     setFilms([...films, {
       id: Date.now(),   // Un ID unique (le timestamp actuel en millisecondes)
       titre: titre,     // La valeur du champ titre
-      note: note        // La valeur du sélecteur de note
+      note: note,       // La valeur du sélecteur de note
+      poster: poster    // Le chemin du poster TMDB (ou null)
     }])
 
     // Remet le formulaire à zéro
     setTitre('')
     setNote(3)
+    setPoster(null)
   }
 
   // Supprime un film : on garde tous les films SAUF celui dont l'ID correspond
@@ -42,24 +107,55 @@ function App() {
   // React transforme ça en vrais éléments HTML dans le navigateur.
   return (
     <div className="app">
+      <button
+        className="toggle-dark"
+        onClick={() => setDark(!dark)}
+        title={dark ? 'Mode clair' : 'Mode sombre'}
+      >
+        {dark ? '☀️' : '🌙'}
+      </button>
+
       <h1>🎬 Ma Filmothèque</h1>
 
       {/* En JSX, les commentaires s'écrivent comme ça */}
       {/* className au lieu de class (class est un mot réservé en JS) */}
 
       <div className="form">
-        {/* 
-          value={titre} → le champ affiche toujours la valeur de 'titre'
-          onChange → à chaque frappe, on met à jour 'titre' avec la nouvelle valeur
-          C'est ce qu'on appelle un "controlled input" : React contrôle le contenu du champ
-        */}
-        <input
-          type="text"
-          placeholder="Titre du film..."
-          value={titre}
-          onChange={(e) => setTitre(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && ajouterFilm()}
-        />
+        {/* Le champ de recherche avec dropdown de suggestions TMDB */}
+        <div className="search-wrapper">
+          <input
+            type="text"
+            placeholder="Rechercher un film..."
+            value={titre}
+            onChange={(e) => setTitre(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && ajouterFilm()}
+            onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
+            onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+          />
+
+          {showSuggestions && suggestions.length > 0 && (
+            <ul className="suggestions">
+              {suggestions.map(film => (
+                <li key={film.id} onMouseDown={() => choisirSuggestion(film)}>
+                  {film.poster_path && (
+                    <img
+                      src={`https://image.tmdb.org/t/p/w92${film.poster_path}`}
+                      alt={film.title}
+                    />
+                  )}
+                  <div className="suggestion-info">
+                    <span className="suggestion-title">{film.title}</span>
+                    {film.release_date && (
+                      <span className="suggestion-year">
+                        {film.release_date.slice(0, 4)}
+                      </span>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
 
         {/* 
           Le select pour la note.
@@ -91,6 +187,15 @@ function App() {
           */}
           {films.map(film => (
             <li key={film.id} className="film-item">
+              {film.poster ? (
+                <img
+                  className="film-poster"
+                  src={`https://image.tmdb.org/t/p/w92${film.poster}`}
+                  alt={film.titre}
+                />
+              ) : (
+                <div className="film-poster-placeholder">🎬</div>
+              )}
               <span className="film-titre">{film.titre}</span>
               {/* '⭐'.repeat(3) → '⭐⭐⭐' — répète l'étoile N fois */}
               <span className="film-note">{'⭐'.repeat(film.note)}</span>
